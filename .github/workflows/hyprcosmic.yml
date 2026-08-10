@@ -1,0 +1,150 @@
+# Build the session on the three distributions HyprCosmic targets.
+#
+# Much lighter than the compositor's matrix: this crate is pure Rust with no
+# system libraries to find, so what is actually being tested per distribution is
+# the toolchain and `just`, not a list of -dev packages.
+#
+# Rust comes from rustup for the same reason it does in cosmic-comp: Cargo.toml
+# asks for edition 2024 and rust-version 1.93, and Debian bookworm ships 1.63.
+#
+# Named hyprcosmic.yml rather than ci.yml to match the compositor fork, where
+# that name is already upstream's and taken. Upstream cosmic-session ships no
+# workflows at all, so nothing here is being displaced.
+name: HyprCosmic
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: ${{ matrix.distro }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: fedora
+            image: fedora:latest
+          - distro: debian
+            image: debian:bookworm
+          - distro: arch
+            image: archlinux:latest
+
+    steps:
+      # Before checkout: actions/checkout needs git and these images are bare.
+      - name: Install build dependencies (fedora)
+        if: matrix.distro == 'fedora'
+        run: dnf -y install --setopt=install_weak_deps=False git curl gcc just
+
+      # bookworm has no `just` package -- it arrived in trixie -- so it is built
+      # from crates.io there. That is why this step installs it separately rather
+      # than listing it above: the fallback is Debian-specific and saying so here
+      # is better than a comment explaining an absence somewhere else.
+      - name: Install build dependencies (debian)
+        if: matrix.distro == 'debian'
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git curl ca-certificates build-essential
+
+      - name: Install build dependencies (arch)
+        if: matrix.distro == 'arch'
+        run: pacman -Syu --noconfirm --needed git curl base-devel just
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain stable --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.distro }}
+
+      - name: Install just (debian only)
+        if: matrix.distro == 'debian'
+        run: cargo install just --locked
+
+      - name: Show toolchain
+        run: |
+          cargo --version
+          just --version
+
+      - name: Build
+        run: just build-release --locked
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Install into a staging root
+        run: just rootdir="$PWD/stage" install
+
+      # These assertions are the "three files, not seven" commit as something
+      # executable. Upstream's recipe wrote /usr/bin/cosmic-session and
+      # cosmic.desktop, which replaced the stock COSMIC session and left nothing
+      # to log into when the fork failed to start. The negative tests are the
+      # important half: it is the files that must NOT appear that made the old
+      # recipe dangerous.
+      - name: Assert it installs beside COSMIC, not over it
+        run: |
+          set -eux
+          test -x stage/usr/libexec/hyprcosmic/cosmic-session
+          test -x stage/usr/bin/start-hyprcosmic
+          test -f stage/usr/share/wayland-sessions/hyprcosmic.desktop
+          test ! -e stage/usr/bin/cosmic-session
+          test ! -e stage/usr/bin/start-cosmic
+          test ! -e stage/usr/share/wayland-sessions/cosmic.desktop
+          test ! -e stage/usr/share/applications/cosmic-mimeapps.list
+          find stage -type f -printf '%M %10s %P\n'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cosmic-session-${{ matrix.distro }}
+          path: stage/
+          retention-days: 14
+
+  # Off the matrix on purpose. Shell scripts do not vary by distribution, and
+  # running this on the bare runner avoids naming the shellcheck package three
+  # times in three package managers to check the same two files three times.
+  scripts:
+    name: session scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # These only ever run at login, where a syntax error is a black screen
+      # with nowhere to print the reason. Parsing them is the cheapest possible
+      # guard against that, and it is worth doing to start-cosmic as well even
+      # though this fork no longer installs it.
+      - name: Syntax-check the session scripts
+        run: |
+          set -eux
+          bash -n data/start-hyprcosmic
+          bash -n data/start-cosmic
+
+      # start-hyprcosmic only. start-cosmic is upstream's, it is not installed
+      # by this fork, and it has pre-existing findings that are not this fork's
+      # to rewrite -- linting it would mean either carrying a diff against
+      # upstream for style or starting with a failing job.
+      - name: Shellcheck
+        run: |
+          set -eux
+          command -v shellcheck >/dev/null || {
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends shellcheck
+          }
+          shellcheck data/start-hyprcosmic
