@@ -68,6 +68,52 @@ export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-COSMIC}"
 export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-hyprcosmic}"
 export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
 
+# gnome-keyring, and the SSH agent it provides.
+#
+# PAM starts the daemon at login but brings up only its `control` socket, so
+# without this a HyprCosmic session has no ssh-agent at all: SSH_AUTH_SOCK is
+# unset, anything over SSH asks for the passphrase every time, and callers of
+# the secrets API find nothing listening. `--start` attaches to the daemon that
+# is already running and brings up whichever components are missing.
+#
+# The daemon writes `NAME=value` to stdout and chatter like
+# "discover_other_daemon: 1" to stderr, so the 2>/dev/null is load-bearing for
+# the parse, not just for tidiness.
+#
+# start-cosmic evals that stdout, but its eval is
+# `eval "$(... > /dev/null 2>&1)"` -- the redirect is *inside* the substitution,
+# so the eval always runs on an empty string and the block works only because
+# of the socket checks that follow it. Rather than repair that by evaluating
+# whatever a daemon chooses to write to stdout, read out the one variable we
+# actually want.
+if [[ -d "/run/user/$(id -u)/keyring" ]]; then
+    keyring_ssh_sock=""
+    if command -v gnome-keyring-daemon >/dev/null 2>&1; then
+        keyring_ssh_sock="$(
+            gnome-keyring-daemon --start --components=pkcs11,secrets,ssh 2>/dev/null |
+                sed -n 's/^SSH_AUTH_SOCK=//p' | tail -n1
+        )"
+    else
+        echo "start-hyprcosmic: gnome-keyring-daemon not found in PATH" >&2
+    fi
+
+    # start-cosmic's rule, kept: set the correct socket or set none at all,
+    # never a wrong one. The daemon's own answer goes first because it is
+    # authoritative about where it just put the socket; the two fixed paths are
+    # the fallback for when it told us nothing.
+    for candidate in \
+        "${keyring_ssh_sock}" \
+        "/run/user/$(id -u)/gcr/ssh" \
+        "/run/user/$(id -u)/keyring/ssh"
+    do
+        if [[ -n "${candidate}" && -S "${candidate}" ]]; then
+            export SSH_AUTH_SOCK="${candidate}"
+            break
+        fi
+    done
+    unset keyring_ssh_sock candidate
+fi
+
 # Same hygiene as start-cosmic: a failed unit left by a previous graphical
 # session will otherwise block this one from starting.
 if command -v systemctl >/dev/null; then
@@ -102,9 +148,14 @@ if command -v systemctl >/dev/null; then
     # `Requisite=graphical-session.target`, which cosmic-session brings up
     # later, so the portal cannot start before this import.
     #
+    # SSH_AUTH_SOCK rides along for the same reason: a user unit or a
+    # systemd-activated app that wants the agent has to find it in the manager's
+    # environment, not in this script's. It is skipped harmlessly when the
+    # keyring block above declined to set it.
+    #
     # `||:` throughout -- losing a portal is bad, refusing to log in is worse.
     systemctl --user import-environment \
-        XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE ||:
+        XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE SSH_AUTH_SOCK ||:
 fi
 
 # Same variables again for dbus-daemon's own activation environment, which
@@ -116,7 +167,7 @@ fi
 # login arrives with DBUS_SESSION_BUS_ADDRESS already set.
 if [[ -n "${DBUS_SESSION_BUS_ADDRESS}" ]] && command -v dbus-update-activation-environment >/dev/null; then
     dbus-update-activation-environment \
-        XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE ||:
+        XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE SSH_AUTH_SOCK ||:
 fi
 
 # cosmic-session takes the compositor to launch as its first argument
