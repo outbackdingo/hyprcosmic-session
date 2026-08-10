@@ -26,6 +26,36 @@ if [[ ! -x "$HYPRCOSMIC_SESSION_BIN" ]]; then
     exit 1
 fi
 
+# Capture this session's output to a file that outlives it.
+#
+# A session that fails drops you straight back to the greeter, taking its
+# stderr with it -- and by then you cannot read the journal from inside a
+# session that no longer exists. A plain file in the cache directory is still
+# there afterwards, whatever happened.
+#
+# A plain redirect, not `tee` into a process substitution: tee would be a child
+# process the session writes through, so if it ever died the session would take
+# a SIGPIPE. Nothing about diagnostics should be able to kill the desktop.
+#
+# Every step is guarded. If any of it fails the session starts anyway with no
+# log -- losing diagnostics is an inconvenience, refusing to log in is not.
+#
+# The previous log is kept as .1, so a second attempt does not erase the
+# evidence from the first.
+HYPRCOSMIC_LOG="${XDG_CACHE_HOME:-$HOME/.cache}/hyprcosmic/session.log"
+if mkdir -p "$(dirname "$HYPRCOSMIC_LOG")" 2>/dev/null; then
+    if [[ -f "$HYPRCOSMIC_LOG" ]]; then
+        mv -f "$HYPRCOSMIC_LOG" "${HYPRCOSMIC_LOG}.1" 2>/dev/null || true
+    fi
+    if : >>"$HYPRCOSMIC_LOG" 2>/dev/null; then
+        exec >>"$HYPRCOSMIC_LOG" 2>&1
+        echo "=== hyprcosmic session starting $(date -Is) ==="
+        echo "    session bin: $HYPRCOSMIC_SESSION_BIN"
+        echo "    comp bin:    $HYPRCOSMIC_COMP_BIN"
+        echo "    autostart:   ${XDG_CONFIG_HOME:-$HOME/.config}/hyprcosmic/autostart"
+    fi
+fi
+
 # Selects the component set in cosmic-session's profile module: cosmic-panel,
 # cosmic-launcher, cosmic-app-library, cosmic-workspaces, cosmic-bg and
 # cosmic-files-applet are skipped; waybar and friends come from
