@@ -68,6 +68,79 @@ export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-COSMIC}"
 export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-hyprcosmic}"
 export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
 
+# Toolkit hints, same set start-cosmic exports.
+#
+# These are what make non-GTK applications behave under a Wayland session at
+# all: Firefox on Wayland rather than XWayland, Qt preferring the Wayland
+# platform plugin and falling back to xcb, and Java AWT not expecting a
+# reparenting window manager (without it, Swing windows come up blank or
+# mispositioned). Nothing here is COSMIC-specific -- it is the generic Wayland
+# session contract, and leaving it out is why Qt and Java apps looked different
+# under HyprCosmic than under the stock session.
+#
+# `:-` rather than a plain assignment, matching the XDG lines above: if
+# something in the environment already made a deliberate choice, it keeps it.
+export _JAVA_AWT_WM_NONREPARENTING="${_JAVA_AWT_WM_NONREPARENTING:-1}"
+export GDK_BACKEND="${GDK_BACKEND:-wayland,x11}"
+export MOZ_ENABLE_WAYLAND="${MOZ_ENABLE_WAYLAND:-1}"
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland;xcb}"
+export QT_AUTO_SCREEN_SCALE_FACTOR="${QT_AUTO_SCREEN_SCALE_FACTOR:-1}"
+export QT_ENABLE_HIGHDPI_SCALING="${QT_ENABLE_HIGHDPI_SCALING:-1}"
+
+# Qt platform theme: CuteCosmic if it is installed, qt6ct/qt5ct if not.
+#
+# Kept pointing at COSMIC's theme rather than HyDE's, because this fork themes
+# GTK/waybar/rofi and has no Qt pipeline: switching to qt5ct here would hand Qt
+# apps to a configuration nothing in this project writes. CuteCosmic at least
+# follows the COSMIC palette that cosmic.conf does drive.
+if [[ -z "${QT_QPA_PLATFORMTHEME:-}" ]]; then
+    export QT_QPA_PLATFORMTHEME=cosmic
+    for qt_plugin_path in /usr/lib{*,/*}/qt6/plugins; do
+        if [[ -f "${qt_plugin_path}/platformthemes/libcutecosmictheme.so" ]]; then
+            export QT_QPA_PLATFORMTHEME=cosmic
+            break
+        elif [[ -f "${qt_plugin_path}/platformthemes/libqt6ct.so" ]] ||
+             [[ -f "${qt_plugin_path}/platformthemes/libqt5ct.so" ]]; then
+            # Keep looking; CuteCosmic later in the glob still wins.
+            # "qt5ct" is the value both qt5ct and qt6ct answer to.
+            export QT_QPA_PLATFORMTHEME=qt5ct
+        fi
+    done
+    unset qt_plugin_path
+fi
+
+# dconf profile, which is where COSMIC's own settings live.
+#
+# The profile file -- `user-db:cosmic` layered above the usual user and system
+# databases -- is shipped by the cosmic-session package, under
+# /usr/share/dconf/profile/cosmic on Fedora.
+#
+# Naming a profile that cannot be found is not a soft failure. dconf logs
+# "using null configuration" and then every GSettings read falls back to schema
+# defaults while writes go nowhere: a whole desktop's settings, apparently
+# blank. Measured here -- a missing profile dumps zero keys where the default
+# profile dumps a full set -- which is why this is guarded and start-cosmic's
+# unconditional export is not copied.
+#
+# The bare name is used rather than an absolute path. start-cosmic has its
+# prefix rewritten in at install time by the Justfile, but dconf searches
+# /etc/dconf/profile first and XDG_DATA_DIRS after, so the bare name keeps an
+# administrator's /etc override working instead of pinning one prefix.
+dconf_profile_found=""
+IFS=: read -r -a xdg_data_dirs <<<"${XDG_DATA_DIRS:-/usr/local/share:/usr/share}" || :
+for dir in /etc "${xdg_data_dirs[@]}"; do
+    if [[ -f "${dir}/dconf/profile/cosmic" ]]; then
+        dconf_profile_found=1
+        break
+    fi
+done
+if [[ -n "${dconf_profile_found}" ]]; then
+    export DCONF_PROFILE=cosmic
+else
+    echo "start-hyprcosmic: no dconf profile 'cosmic' found; leaving DCONF_PROFILE unset" >&2
+fi
+unset dconf_profile_found xdg_data_dirs dir
+
 # gnome-keyring, and the SSH agent it provides.
 #
 # PAM starts the daemon at login but brings up only its `control` socket, so
@@ -155,7 +228,8 @@ if command -v systemctl >/dev/null; then
     #
     # `||:` throughout -- losing a portal is bad, refusing to log in is worse.
     systemctl --user import-environment \
-        XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE SSH_AUTH_SOCK ||:
+        XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE \
+        DCONF_PROFILE SSH_AUTH_SOCK ||:
 fi
 
 # Same variables again for dbus-daemon's own activation environment, which
@@ -167,7 +241,8 @@ fi
 # login arrives with DBUS_SESSION_BUS_ADDRESS already set.
 if [[ -n "${DBUS_SESSION_BUS_ADDRESS}" ]] && command -v dbus-update-activation-environment >/dev/null; then
     dbus-update-activation-environment \
-        XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE SSH_AUTH_SOCK ||:
+        XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE \
+        DCONF_PROFILE SSH_AUTH_SOCK ||:
 fi
 
 # cosmic-session takes the compositor to launch as its first argument
