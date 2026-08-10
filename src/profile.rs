@@ -281,4 +281,19 @@ mod tests {
     fn missing_extras_file_is_not_an_error() {
         assert!(read_extras(std::path::Path::new("/nonexistent/hyprcosmic/autostart")).is_empty());
     }
+
+    /// The template we ship is mostly prose, and `#` starts a comment wherever
+    /// a word would start — so a comment marker in the wrong column drops a
+    /// command silently instead of failing. Parse the real file and assert
+    /// what it yields, so editing the prose cannot quietly disable the bar.
+    #[test]
+    fn the_shipped_autostart_parses_to_the_commands_it_documents() {
+        let text = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../config/autostart"));
+        let got = parse_extras(text);
+        assert_eq!(got.len(), 3, "{got:?}");
+        // First, so its startup compile lands before the compositor settles.
+        assert_eq!(got[0], vec!["cosmic-conf", "watch"]);
+        assert_eq!(got[1][0], "waybar");
+        assert_eq!(got[2], vec!["awww-daemon"]);
+    }
 }
