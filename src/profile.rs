@@ -290,10 +290,44 @@ mod tests {
     fn the_shipped_autostart_parses_to_the_commands_it_documents() {
         let text = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../config/autostart"));
         let got = parse_extras(text);
-        assert_eq!(got.len(), 3, "{got:?}");
+        assert_eq!(got.len(), 5, "{got:?}");
         // First, so its startup compile lands before the compositor settles.
         assert_eq!(got[0], vec!["cosmic-conf", "watch"]);
         assert_eq!(got[1][0], "waybar");
         assert_eq!(got[2], vec!["awww-daemon"]);
+        // Last, so the fallback terminal is the topmost window.
+        assert_eq!(got[4], vec!["cosmic-term"]);
+    }
+
+    /// The wallpaper line is the one entry that is a shell invocation, so the
+    /// whole script has to arrive as a single argument. Getting the quoting
+    /// wrong splits it and awww sets nothing -- which is exactly the silent
+    /// blank screen this line was added to fix, so assert the argv rather than
+    /// trusting it by eye.
+    ///
+    /// It once named a wallpaper directly and had to survive the space in
+    /// "Tokyo Night"; it now names the `current` symlink that
+    /// `cosmic-conf import-theme --assets` maintains, which has no space in it
+    /// and does not change when the theme does. Quoting a path that contains a
+    /// space is still covered, on synthetic input, by
+    /// `quotes_hold_arguments_containing_spaces_together`.
+    #[test]
+    fn the_wallpaper_line_survives_its_nested_quoting() {
+        let text = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../config/autostart"));
+        let argv = &parse_extras(text)[3];
+        assert_eq!(argv[0], "sh");
+        assert_eq!(argv[1], "-c");
+        // One argument, not several: the script stayed in one piece.
+        assert_eq!(argv.len(), 3, "{argv:?}");
+        // The symlink, not one of the copies beside it. Naming a copy would
+        // strand this line on a path the next theme import deletes.
+        assert!(
+            argv[2].contains(r#""/home/dingo/.local/share/wallpapers/hyprcosmic/current""#),
+            "{}",
+            argv[2]
+        );
+        // The daemon is not listening the instant it is forked, so the image
+        // must not be set until it answers.
+        assert!(argv[2].starts_with("until awww query"), "{}", argv[2]);
     }
 }
