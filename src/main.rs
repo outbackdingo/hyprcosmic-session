@@ -358,9 +358,19 @@ async fn start(
 
 	// Profile extras (waybar, swww, ...) come last, so they start against a
 	// session that already has its compositor-side services up.
-	for command in profile::Profile::cached().extra() {
+	for argv in profile::Profile::cached().extra() {
+		let Some((exe, args)) = argv.split_first() else {
+			continue;
+		};
 		let span = info_span!(parent: None, "hyprcosmic-extra");
-		start_component(command.clone(), span, &process_manager, &env_vars).await;
+		start_process(
+			Cow::Owned(exe.clone()),
+			args.to_vec(),
+			span,
+			&process_manager,
+			&env_vars,
+		)
+		.await;
 	}
 
 	#[cfg(feature = "autostart")]
@@ -529,6 +539,24 @@ async fn start_component(
 		return;
 	}
 
+	start_process(cmd, Vec::new(), span, process_manager, env_vars).await;
+}
+
+/// Upstream's `start_component` body, with argv threaded through.
+///
+/// Profile extras need arguments -- `waybar -c <path>` is the motivating case --
+/// and `Process::with_executable` treats its whole argument as the program name,
+/// so spawning "waybar -c x" would search for a binary with spaces in its name.
+/// Splitting the spawn out here gives extras real arguments without a near-copy
+/// of this function, and leaves `start_component`'s signature alone so upstream
+/// call sites stay untouched.
+async fn start_process(
+	cmd: Cow<'static, str>,
+	args: Vec<String>,
+	span: tracing::Span,
+	process_manager: &ProcessManager,
+	env_vars: &[(String, String)],
+) {
 	let stdout_span = span.clone();
 	let stderr_span = span.clone();
 	let stderr_span_clone = stderr_span.clone();
@@ -538,6 +566,7 @@ async fn start_component(
 		.start(
 			Process::new()
 				.with_executable(cmd.clone())
+				.with_args(args)
 				.with_env(env_vars.iter().cloned())
 				.with_on_stdout(move |_, _, line| {
 					let stdout_span = stdout_span.clone();

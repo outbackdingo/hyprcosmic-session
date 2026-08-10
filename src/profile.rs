@@ -25,8 +25,9 @@ pub struct Profile {
     pub name: String,
     /// Upstream components to skip.
     disabled: BTreeSet<String>,
-    /// Additional commands to launch after the built-in set.
-    extra: Vec<String>,
+    /// Additional commands to launch after the built-in set, each already
+    /// split into argv.
+    extra: Vec<Vec<String>>,
 }
 
 impl Default for Profile {
@@ -100,7 +101,7 @@ impl Profile {
         !self.disabled.contains(component)
     }
 
-    pub fn extra(&self) -> &[String] {
+    pub fn extra(&self) -> &[Vec<String>] {
         &self.extra
     }
 }
@@ -118,23 +119,60 @@ fn extras_path() -> Option<PathBuf> {
 /// A missing file is normal, not an error — most sessions will not have one.
 /// Deliberately not a shell: each line is exec'd directly, so a stray
 /// backtick in a config cannot run something unexpected.
-fn read_extras(path: &std::path::Path) -> Vec<String> {
+fn read_extras(path: &std::path::Path) -> Vec<Vec<String>> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
     parse_extras(&text)
 }
 
-fn parse_extras(text: &str) -> Vec<String> {
+fn parse_extras(text: &str) -> Vec<Vec<String>> {
     text.lines()
-        .map(|l| match l.find('#') {
-            Some(i) => &l[..i],
-            None => l,
-        })
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(String::from)
+        .map(split_argv)
+        .filter(|argv| !argv.is_empty())
         .collect()
+}
+
+/// Split one line into argv the way a user expects, without being a shell.
+///
+/// Quoting groups words that contain spaces, which config paths do, and `#`
+/// begins a comment where a word would start -- both matching shell intuition.
+/// Nothing else is interpreted: no variable expansion, no globbing, no command
+/// substitution. So a backtick or `$(...)` in this file is inert text, and the
+/// file cannot be turned into an execution vector by something that can write
+/// to it but not to the binaries it names.
+fn split_argv(line: &str) -> Vec<String> {
+    let mut argv = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut quote: Option<char> = None;
+
+    let mut push = |word: &mut String, started: &mut bool| {
+        if *started {
+            argv.push(std::mem::take(word));
+            *started = false;
+        }
+    };
+
+    for c in line.chars() {
+        match quote {
+            // Closing quote. `started` stays set, so `""` yields an empty arg.
+            Some(q) if c == q => quote = None,
+            Some(_) => word.push(c),
+            None if c == '\'' || c == '"' => {
+                quote = Some(c);
+                started = true;
+            }
+            None if c == '#' && !started => break,
+            None if c.is_whitespace() => push(&mut word, &mut started),
+            None => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    push(&mut word, &mut started);
+    argv
 }
 
 #[cfg(test)]
@@ -182,7 +220,60 @@ mod tests {
         let text = "\n# a comment\nwaybar\n  swww-daemon  \n\nrofi -show drun # trailing\n";
         assert_eq!(
             parse_extras(text),
-            vec!["waybar", "swww-daemon", "rofi -show drun"]
+            vec![
+                vec!["waybar"],
+                vec!["swww-daemon"],
+                vec!["rofi", "-show", "drun"],
+            ]
+        );
+    }
+
+    #[test]
+    fn extras_split_into_argv_not_one_long_program_name() {
+        // Regression: `Process::with_executable` takes the whole string as the
+        // program name, so an unsplit line looks for a binary literally called
+        // "waybar -c /path". The bar silently never starts.
+        assert_eq!(
+            split_argv("waybar -c /etc/waybar/config.jsonc"),
+            vec!["waybar", "-c", "/etc/waybar/config.jsonc"]
+        );
+    }
+
+    #[test]
+    fn quotes_hold_arguments_containing_spaces_together() {
+        assert_eq!(
+            split_argv("waybar -c '/home/a b/config.jsonc' -s \"/home/a b/style.css\""),
+            vec![
+                "waybar",
+                "-c",
+                "/home/a b/config.jsonc",
+                "-s",
+                "/home/a b/style.css",
+            ]
+        );
+    }
+
+    #[test]
+    fn hash_is_a_comment_between_words_but_data_inside_one() {
+        // Matches shell intuition, and keeps hex colours usable as arguments.
+        assert_eq!(split_argv("swaybg -c #1a1b26"), vec!["swaybg", "-c"]);
+        assert_eq!(
+            split_argv("swaybg -c '#1a1b26'"),
+            vec!["swaybg", "-c", "#1a1b26"]
+        );
+        assert_eq!(
+            split_argv("swaybg --color=#1a1b26"),
+            vec!["swaybg", "--color=#1a1b26"]
+        );
+    }
+
+    #[test]
+    fn nothing_is_expanded_so_the_file_is_not_an_execution_vector() {
+        // A writer of this file gets to name a program and its arguments, and
+        // nothing more: no subshell, no variable, no glob.
+        assert_eq!(
+            split_argv("waybar $(id) `id` $HOME *"),
+            vec!["waybar", "$(id)", "`id`", "$HOME", "*"]
         );
     }
 
