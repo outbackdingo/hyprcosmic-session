@@ -56,15 +56,16 @@ if [[ -z "${HYPRCOSMIC_LOGIN_SHELL:-}" && -n "${SHELL:-}" && -x "${SHELL}" ]]; t
     esac
 fi
 
-# The forked binaries, installed alongside rather than over the stock ones.
+# The binaries. HyprCosmic replaces COSMIC rather than installing beside it, so
+# these are the ordinary paths -- this fork's cosmic-session *is* the machine's
+# cosmic-session, and there is no second copy under a private prefix.
 #
-# Pointing at /usr/bin/cosmic-session here would be a silent no-op: the system
-# binary has no profile module, so the session would come up as ordinary COSMIC
-# and the gating would look broken. Installing to a private prefix instead of
-# replacing /usr/bin also means `dnf update cosmic-session` cannot clobber the
-# fork, and the stock session entry keeps working as the escape hatch.
-HYPRCOSMIC_SESSION_BIN="${HYPRCOSMIC_SESSION_BIN:-/usr/libexec/hyprcosmic/cosmic-session}"
-HYPRCOSMIC_COMP_BIN="${HYPRCOSMIC_COMP_BIN:-/usr/libexec/hyprcosmic/cosmic-comp}"
+# Still named in variables rather than called bare. Two reasons: the check below
+# can then say which path was missing, and both stay overridable from the
+# environment, which is how the session is run out of a build tree without
+# installing it.
+HYPRCOSMIC_SESSION_BIN="${HYPRCOSMIC_SESSION_BIN:-/usr/bin/cosmic-session}"
+HYPRCOSMIC_COMP_BIN="${HYPRCOSMIC_COMP_BIN:-/usr/bin/cosmic-comp}"
 
 if [[ ! -x "$HYPRCOSMIC_SESSION_BIN" ]]; then
     echo "start-hyprcosmic: $HYPRCOSMIC_SESSION_BIN is missing or not executable" >&2

@@ -131,23 +131,39 @@ jobs:
       - name: Install into a staging root
         run: just rootdir="$PWD/stage" install
 
-      # These assertions are the "three files, not seven" commit as something
-      # executable. Upstream's recipe wrote /usr/bin/cosmic-session and
-      # cosmic.desktop, which replaced the stock COSMIC session and left nothing
-      # to log into when the fork failed to start. The negative tests are the
-      # important half: it is the files that must NOT appear that made the old
-      # recipe dangerous.
-      - name: Assert it installs beside COSMIC, not over it
+      # Eight files: upstream's six, at upstream's paths, plus this fork's two.
+      # HyprCosmic replaces COSMIC rather than installing beside it, so nothing
+      # else on the machine provides the systemd target, the mimeapps list or
+      # the dconf profile -- a session that omits them starts, and then has no
+      # user target for the portals to attach to, which surfaces much later and
+      # much less clearly than a missing file would.
+      #
+      # Both session entries are asserted. Dropping cosmic.desktop would leave a
+      # machine whose only way in is the HyDE shell, and the last two lines are
+      # what stop the private libexec layout from creeping back.
+      - name: Assert it installs as the session, at upstream's paths
         run: |
           set -eux
-          test -x stage/usr/libexec/hyprcosmic/cosmic-session
+          test -x stage/usr/bin/cosmic-session
           test -x stage/usr/bin/start-hyprcosmic
+          test -x stage/usr/bin/start-cosmic
           test -f stage/usr/share/wayland-sessions/hyprcosmic.desktop
-          test ! -e stage/usr/bin/cosmic-session
-          test ! -e stage/usr/bin/start-cosmic
-          test ! -e stage/usr/share/wayland-sessions/cosmic.desktop
-          test ! -e stage/usr/share/applications/cosmic-mimeapps.list
+          test -f stage/usr/share/wayland-sessions/cosmic.desktop
+          test -f stage/usr/lib/systemd/user/cosmic-session.target
+          test -f stage/usr/share/applications/cosmic-mimeapps.list
+          test -f stage/usr/share/dconf/profile/cosmic
+          test ! -e stage/usr/libexec/hyprcosmic/cosmic-session
           find stage -type f -printf '%M %10s %P\n'
+
+      # Upstream rewrites DCONF_PROFILE to an absolute path in its own start
+      # script; this fork's searches for the profile at runtime instead. Both
+      # behaviours are deliberate, and the pair is easy to get backwards in a
+      # recipe that now installs both scripts.
+      - name: Assert the dconf rewrite hit start-cosmic and only start-cosmic
+        run: |
+          set -eux
+          grep -q 'DCONF_PROFILE=/usr/share/dconf/profile/cosmic' stage/usr/bin/start-cosmic
+          grep -q 'DCONF_PROFILE=cosmic$' stage/usr/bin/start-hyprcosmic
 
       - uses: actions/upload-artifact@v4
         with:
