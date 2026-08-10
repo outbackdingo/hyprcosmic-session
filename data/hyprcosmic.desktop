@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=HyprCosmic
+Comment=COSMIC's compositor with a HyDE-style shell
+Exec=/usr/bin/start-hyprcosmic
+Type=Application
+DesktopNames=COSMIC
+Keywords=hyprland;hyde;waybar;cosmic;

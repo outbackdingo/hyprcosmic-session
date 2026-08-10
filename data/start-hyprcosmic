@@ -1,0 +1,50 @@
+#!/usr/bin/bash
+#
+# Launch a HyprCosmic session: cosmic-comp for window management, HyDE's shell
+# on top.
+#
+# Deliberately separate from /usr/bin/start-cosmic rather than patching it.
+# The stock COSMIC session entry keeps working untouched, so a broken
+# HyprCosmic config is always one logout away from being escaped — which
+# matters when the thing you are replacing is your desktop.
+
+set -e
+
+# Default to the installed binaries. Override either one to point at an
+# in-tree debug build when testing the fork without installing it.
+HYPRCOSMIC_SESSION_BIN="${HYPRCOSMIC_SESSION_BIN:-/usr/bin/cosmic-session}"
+HYPRCOSMIC_COMP_BIN="${HYPRCOSMIC_COMP_BIN:-cosmic-comp}"
+
+# Selects the component set in cosmic-session's profile module: cosmic-panel,
+# cosmic-launcher, cosmic-app-library, cosmic-workspaces, cosmic-bg and
+# cosmic-files-applet are skipped; waybar and friends come from
+# ~/.config/hyprcosmic/autostart.
+export HYPRCOSMIC_PROFILE=hyprcosmic
+
+# Keep COSMIC's identity: portals, cosmic-settings and any COSMIC app still
+# key off this, and the compositor underneath really is COSMIC.
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-COSMIC}"
+export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-hyprcosmic}"
+
+# Same hygiene as start-cosmic: a failed unit left by a previous graphical
+# session will otherwise block this one from starting.
+if command -v systemctl >/dev/null; then
+    for unit in $(systemctl --user --no-legend --state=failed --plain list-units | cut -f1 -d' '); do
+        partof="$(systemctl --user show -p PartOf --value "$unit")"
+        for target in cosmic-session.target graphical-session.target; do
+            if [ "$partof" = "$target" ]; then
+                systemctl --user reset-failed "$unit"
+                break
+            fi
+        done
+    done
+fi
+
+# cosmic-session takes the compositor to launch as its first argument
+# (main.rs: `args.next().unwrap_or_else(|| String::from("cosmic-comp"))`),
+# which is how a forked cosmic-comp gets used without replacing the system one.
+if [[ -z "${DBUS_SESSION_BUS_ADDRESS}" ]]; then
+    exec /usr/bin/dbus-run-session -- "${HYPRCOSMIC_SESSION_BIN}" "${HYPRCOSMIC_COMP_BIN}"
+else
+    exec "${HYPRCOSMIC_SESSION_BIN}" "${HYPRCOSMIC_COMP_BIN}"
+fi

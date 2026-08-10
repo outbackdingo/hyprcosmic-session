@@ -32,3 +32,6 @@ debian/*
 !debian/links
 !debian/rules
 !debian/source
+
+# HyprCosmic: OMC operational artifacts
+.omc/

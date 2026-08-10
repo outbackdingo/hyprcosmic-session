@@ -6,6 +6,7 @@ mod a11y;
 mod comp;
 mod notifications;
 mod process;
+mod profile;
 mod service;
 mod systemd;
 
@@ -282,49 +283,54 @@ async fn start(
 		panel_notifications_fd.as_raw_fd().to_string(),
 	));
 
-	let panel_key = Arc::new(Mutex::new(None));
-	let notif_key = Arc::new(Mutex::new(None));
+	// cosmic-panel and cosmic-notifications are started as a coupled pair
+	// (they share notification fds), so they cannot go through the gate in
+	// `start_component` and are checked here instead.
+	if profile::Profile::cached().is_enabled("cosmic-panel") {
+		let panel_key = Arc::new(Mutex::new(None));
+		let notif_key = Arc::new(Mutex::new(None));
 
-	let notifications_span = info_span!(parent: None, "cosmic-notifications");
-	let panel_span = info_span!(parent: None, "cosmic-panel");
+		let notifications_span = info_span!(parent: None, "cosmic-notifications");
+		let panel_span = info_span!(parent: None, "cosmic-panel");
 
-	let mut guard = notif_key.lock().await;
-	*guard = Some(
-		process_manager
-			.start(notifications_process(
-				notifications_span.clone(),
-				"cosmic-notifications",
-				notif_key.clone(),
-				daemon_env_vars.clone(),
-				daemon_notifications_fd,
-				panel_span.clone(),
-				"cosmic-panel",
-				panel_key.clone(),
-				panel_env_vars.clone(),
-			))
-			.await
-			.expect("failed to start notifications daemon"),
-	);
-	drop(guard);
+		let mut guard = notif_key.lock().await;
+		*guard = Some(
+			process_manager
+				.start(notifications_process(
+					notifications_span.clone(),
+					"cosmic-notifications",
+					notif_key.clone(),
+					daemon_env_vars.clone(),
+					daemon_notifications_fd,
+					panel_span.clone(),
+					"cosmic-panel",
+					panel_key.clone(),
+					panel_env_vars.clone(),
+				))
+				.await
+				.expect("failed to start notifications daemon"),
+		);
+		drop(guard);
 
-	let mut guard = panel_key.lock().await;
-	*guard = Some(
-		process_manager
-			.start(notifications_process(
-				panel_span,
-				"cosmic-panel",
-				panel_key.clone(),
-				panel_env_vars,
-				panel_notifications_fd,
-				notifications_span,
-				"cosmic-notifications",
-				notif_key,
-				daemon_env_vars,
-			))
-			.await
-			.expect("failed to start panel"),
-	);
-	drop(guard);
+		let mut guard = panel_key.lock().await;
+		*guard = Some(
+			process_manager
+				.start(notifications_process(
+					panel_span,
+					"cosmic-panel",
+					panel_key.clone(),
+					panel_env_vars,
+					panel_notifications_fd,
+					notifications_span,
+					"cosmic-notifications",
+					notif_key,
+					daemon_env_vars,
+				))
+				.await
+				.expect("failed to start panel"),
+		);
+		drop(guard);
+	}
 
 	let span = info_span!(parent: None, "cosmic-app-library");
 	start_component("cosmic-app-library", span, &process_manager, &env_vars).await;
@@ -349,6 +355,13 @@ async fn start(
 
 	let span = info_span!(parent: None, "cosmic-idle");
 	start_component("cosmic-idle", span, &process_manager, &env_vars).await;
+
+	// Profile extras (waybar, swww, ...) come last, so they start against a
+	// session that already has its compositor-side services up.
+	for command in profile::Profile::cached().extra() {
+		let span = info_span!(parent: None, "hyprcosmic-extra");
+		start_component(command.clone(), span, &process_manager, &env_vars).await;
+	}
 
 	#[cfg(feature = "autostart")]
 	if !*is_systemd_used() {
@@ -508,10 +521,17 @@ async fn start_component(
 	process_manager: &ProcessManager,
 	env_vars: &[(String, String)],
 ) {
+	let cmd = cmd.into();
+	// Gating here rather than at each call site keeps the diff against
+	// upstream to this one block, which matters for rebasing.
+	if !profile::Profile::cached().is_enabled(&cmd) {
+		info!("{cmd} disabled by the {} profile", profile::Profile::cached().name);
+		return;
+	}
+
 	let stdout_span = span.clone();
 	let stderr_span = span.clone();
 	let stderr_span_clone = stderr_span.clone();
-	let cmd = cmd.into();
 	let cmd_clone = cmd.clone();
 
 	if let Err(err) = process_manager
