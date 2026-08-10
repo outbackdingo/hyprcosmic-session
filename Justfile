@@ -9,6 +9,12 @@ systemddir := usrdir / 'lib' / 'systemd' / 'user'
 sessiondir := usrdir / 'share' / 'wayland-sessions'
 applicationdir := usrdir / 'share' / 'applications'
 
+# The fork's own binary directory. It stays out of bindir for the same reason
+# the compositor does: the distro's cosmic-session owns /usr/bin/cosmic-session,
+# and overwriting it would break the stock session -- the one you need to log
+# into when this one will not start.
+privdir := usrdir / 'libexec' / 'hyprcosmic'
+
 default: build-release
 
 build-debug *args:
@@ -29,26 +35,40 @@ clean-dist: clean
     rm -rf .cargo vendor vendor.tar target
 
 # Installs files into the system
+#
+# Three files, where upstream installs seven. The four that are gone are not
+# oversights -- each is owned by the distro's own cosmic-session package, and
+# writing them from here would make a HyprCosmic package conflict with it:
+#
+#   data/start-cosmic          -> /usr/bin/start-cosmic
+#   data/cosmic-session.target -> systemd user target
+#   data/cosmic-mimeapps.list  -> the default-applications list
+#   data/dconf/profile/cosmic  -> the dconf profile
+#
+# None of them are things this fork changes, and a HyprCosmic session needs
+# stock COSMIC installed regardless, for the greeter, the portals and the
+# settings daemon. So it reads that package's copies rather than shipping rival
+# ones. `data/cosmic.desktop` is dropped for the same reason and replaced by
+# hyprcosmic.desktop, which is what puts the second entry on the greeter's menu
+# instead of overwriting the first.
+#
+# Upstream's `sed` over DCONF_PROFILE is deliberately not carried across.
+# start-hyprcosmic searches /etc/dconf/profile and then XDG_DATA_DIRS for the
+# profile and exports the bare name only if it finds one; rewriting a prefix
+# into it would pin one location and break an administrator's /etc override.
+# The script says so at the point where it does the search.
 install:
-    echo {{ cosmic_dconf_profile }}
     # main binary
-    install -Dm0755 {{ cargo-target-dir }}/release/cosmic-session {{ bindir }}/cosmic-session
+    install -Dm0755 {{ cargo-target-dir }}/release/cosmic-session {{ privdir }}/cosmic-session
 
     # session start script
-    install -Dm0755 data/start-cosmic {{ bindir }}/start-cosmic
-    sed -i "s|DCONF_PROFILE=cosmic|DCONF_PROFILE={{ cosmic_dconf_profile }}|" {{ bindir }}/start-cosmic
+    install -Dm0755 data/start-hyprcosmic {{ bindir }}/start-hyprcosmic
 
-    # systemd target
-    install -Dm0644 data/cosmic-session.target {{ systemddir }}/cosmic-session.target
-
-    # session
-    install -Dm0644 data/cosmic.desktop {{ sessiondir }}/cosmic.desktop
-
-    # mimeapps
-    install -Dm0644 data/cosmic-mimeapps.list {{ applicationdir }}/cosmic-mimeapps.list
-
-    # dconf profile
-    install -Dm644 data/dconf/profile/cosmic {{ rootdir }}/{{ cosmic_dconf_profile }}
+    # session entry. Note that hyprcosmic.desktop names /usr/bin/start-hyprcosmic
+    # as an absolute Exec: a .desktop file has no way to interpolate a prefix,
+    # so building with prefix != /usr installs an entry that points at a path
+    # this recipe did not write.
+    install -Dm0644 data/hyprcosmic.desktop {{ sessiondir }}/hyprcosmic.desktop
 
 # Vendor Cargo dependencies locally
 vendor:
