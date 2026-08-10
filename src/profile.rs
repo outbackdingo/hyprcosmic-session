@@ -293,7 +293,9 @@ mod tests {
         assert_eq!(got.len(), 5, "{got:?}");
         // First, so its startup compile lands before the compositor settles.
         assert_eq!(got[0], vec!["cosmic-conf", "watch"]);
-        assert_eq!(got[1][0], "waybar");
+        // The bar is a shell invocation, because its stylesheet lives under a
+        // home directory that this file cannot expand on its own.
+        assert_eq!(got[1][0], "sh");
         assert_eq!(got[2], vec!["awww-daemon"]);
         // Last, so the fallback terminal is the topmost window.
         assert_eq!(got[4], vec!["cosmic-term"]);
@@ -321,13 +323,38 @@ mod tests {
         assert_eq!(argv.len(), 3, "{argv:?}");
         // The symlink, not one of the copies beside it. Naming a copy would
         // strand this line on a path the next theme import deletes.
+        //
+        // `$HOME` rather than a real home directory: sh expands it, and the
+        // shipped template has to work for whoever installed it, not only for
+        // whoever wrote it. The double quotes are asserted with it, because
+        // dropping them is what would split the path at a space in $HOME.
         assert!(
-            argv[2].contains(r#""/home/dingo/.local/share/wallpapers/hyprcosmic/current""#),
+            argv[2].contains(r#""$HOME/.local/share/wallpapers/hyprcosmic/current""#),
             "{}",
             argv[2]
         );
         // The daemon is not listening the instant it is forked, so the image
         // must not be set until it answers.
         assert!(argv[2].starts_with("until awww query"), "{}", argv[2]);
+    }
+
+    /// The template is installed verbatim into every user's config directory,
+    /// so a literal `/home/someone` in it is a file that works for exactly one
+    /// person -- and it fails quietly for everyone else, because a waybar with
+    /// an unreadable stylesheet still starts and a wallpaper that was never set
+    /// looks the same as one that failed to load.
+    ///
+    /// Both lines carried an author's home directory until the repository was
+    /// about to be published. This is here so that neither can carry one again.
+    #[test]
+    fn the_shipped_autostart_names_nobodys_home_directory() {
+        let text = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../config/autostart"));
+        for (n, line) in text.lines().enumerate() {
+            assert!(
+                !line.contains("/home/"),
+                "config/autostart:{}: absolute home directory: {line}",
+                n + 1
+            );
+        }
     }
 }
