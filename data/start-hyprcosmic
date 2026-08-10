@@ -66,6 +66,7 @@ export HYPRCOSMIC_PROFILE=hyprcosmic
 # key off this, and the compositor underneath really is COSMIC.
 export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-COSMIC}"
 export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-hyprcosmic}"
+export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
 
 # Same hygiene as start-cosmic: a failed unit left by a previous graphical
 # session will otherwise block this one from starting.
@@ -79,6 +80,43 @@ if command -v systemctl >/dev/null; then
             fi
         done
     done
+
+    # Hand the session's identity to `systemd --user`, which is what actually
+    # launches the portal.
+    #
+    # Exporting XDG_CURRENT_DESKTOP above only reaches processes started *by
+    # this script*. The user manager is older than the session and has its own
+    # environment block, so anything it activates -- xdg-desktop-portal, and
+    # through it xdg-desktop-portal-cosmic, which is `SystemdService=` in its
+    # D-Bus service file -- never saw the variable.
+    #
+    # xdg-desktop-portal picks a backend by matching the `UseIn=` line of
+    # /usr/share/xdg-desktop-portal/portals/*.portal against
+    # XDG_CURRENT_DESKTOP. With the variable unset, `UseIn=COSMIC` did not
+    # match, no backend loaded, and org.freedesktop.portal.Screenshot was never
+    # exported -- so pressing PrtScr made cosmic-screenshot unwrap an error and
+    # abort with "COSMIC screenshot crashed". Nothing logged a missing portal;
+    # the only symptom was the crash.
+    #
+    # Ordering is fine: xdg-desktop-portal.service is `After=` and
+    # `Requisite=graphical-session.target`, which cosmic-session brings up
+    # later, so the portal cannot start before this import.
+    #
+    # `||:` throughout -- losing a portal is bad, refusing to log in is worse.
+    systemctl --user import-environment \
+        XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE ||:
+fi
+
+# Same variables again for dbus-daemon's own activation environment, which
+# covers any backend whose .service file has no `SystemdService=` line.
+#
+# Only when a bus already exists. In the dbus-run-session branch below the bus
+# is created *after* this point, so calling it here would talk to the wrong bus
+# or none at all. That branch is the fallback path anyway; a normal graphical
+# login arrives with DBUS_SESSION_BUS_ADDRESS already set.
+if [[ -n "${DBUS_SESSION_BUS_ADDRESS}" ]] && command -v dbus-update-activation-environment >/dev/null; then
+    dbus-update-activation-environment \
+        XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE ||:
 fi
 
 # cosmic-session takes the compositor to launch as its first argument
