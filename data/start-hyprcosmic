@@ -10,6 +10,52 @@
 
 set -e
 
+# Re-exec through the user's login shell, before anything else runs.
+#
+# The greeter starts this script with a minimal environment: what pam and
+# systemd put there, and nothing from /etc/profile or the user's own login
+# files. start-cosmic re-execs itself through $SHELL to pick those up, and not
+# doing the same here is why the two sessions disagree about the environment.
+# see: https://github.com/pop-os/cosmic-session/issues/23
+#
+# The measurable difference on this machine is XDG_DATA_DIRS. Without this pass
+# it arrives empty; /etc/profile.d/flatpak.sh is what appends the two flatpak
+# exports directories, and those are where flatpak applications keep the
+# .desktop files and icons the launcher looks for. PATH is untouched either way
+# -- /etc/profile only appends what is missing -- so this adds and does not
+# rearrange.
+#
+# First in the file, deliberately. The login files are allowed to set
+# XDG_CACHE_HOME, which is where the log below decides to go, so this has to
+# happen while there is still nothing to lose. The cost is one extra process
+# and, measured here, about 35ms.
+#
+# The guard is an exported variable rather than start-cosmic's positional
+# `--in-login-shell`. A flag has to survive being quoted through another shell
+# to be seen on the way back in; if it ever failed to, the script would re-exec
+# itself forever and the login would hang instead of failing. An exported
+# variable survives exec by definition, so the recursion cannot happen.
+#
+# `exec -l` is bash's own flag and this script is bash, so start-cosmic's extra
+# `bash -c` hop buys nothing. The inner `exec` means the login shell replaces
+# itself with the session rather than sitting there as its parent for the rest
+# of the login.
+#
+# Whatever goes wrong here is unlogged, because the log does not exist yet --
+# hence checking that the shell is real and runnable first rather than finding
+# out from a session that dies silently.
+if [[ -z "${HYPRCOSMIC_LOGIN_SHELL:-}" && -n "${SHELL:-}" && -x "${SHELL}" ]]; then
+    case "${SHELL##*/}" in
+        nologin | false)
+            # An account with no usable login shell still gets a desktop.
+            ;;
+        *)
+            export HYPRCOSMIC_LOGIN_SHELL=1
+            exec -l "${SHELL}" -c "exec $(printf '%q' "$0")"
+            ;;
+    esac
+fi
+
 # The forked binaries, installed alongside rather than over the stock ones.
 #
 # Pointing at /usr/bin/cosmic-session here would be a silent no-op: the system
