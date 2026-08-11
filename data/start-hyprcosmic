@@ -56,16 +56,25 @@ if [[ -z "${HYPRCOSMIC_LOGIN_SHELL:-}" && -n "${SHELL:-}" && -x "${SHELL}" ]]; t
     esac
 fi
 
-# The binaries. HyprCosmic replaces COSMIC rather than installing beside it, so
-# these are the ordinary paths -- this fork's cosmic-session *is* the machine's
-# cosmic-session, and there is no second copy under a private prefix.
+# The binaries, under their own names. HyprCosmic installs beside COSMIC rather
+# than over it: these are this fork's builds, and /usr/bin/cosmic-session and
+# /usr/bin/cosmic-comp are left to the distribution's packages.
+#
+# That is what keeps the stock session on the greeter's menu and working. The
+# alternative -- taking the cosmic-* names -- means erasing the distribution's
+# compositor and session to install this, which on Fedora also means erasing
+# cosmic-greeter, which is the display manager. A fork that can only be tried by
+# removing the desktop it forked is a fork nobody can back out of.
+#
+# cosmic-session takes the compositor as argv[1], so the pairing is arranged
+# here and needs no patch: see the exec at the end of this file.
 #
 # Still named in variables rather than called bare. Two reasons: the check below
 # can then say which path was missing, and both stay overridable from the
 # environment, which is how the session is run out of a build tree without
 # installing it.
-HYPRCOSMIC_SESSION_BIN="${HYPRCOSMIC_SESSION_BIN:-/usr/bin/cosmic-session}"
-HYPRCOSMIC_COMP_BIN="${HYPRCOSMIC_COMP_BIN:-/usr/bin/cosmic-comp}"
+HYPRCOSMIC_SESSION_BIN="${HYPRCOSMIC_SESSION_BIN:-/usr/bin/hyprcosmic-session}"
+HYPRCOSMIC_COMP_BIN="${HYPRCOSMIC_COMP_BIN:-/usr/bin/hyprcosmic-comp}"
 
 if [[ ! -x "$HYPRCOSMIC_SESSION_BIN" ]]; then
     echo "start-hyprcosmic: $HYPRCOSMIC_SESSION_BIN is missing or not executable" >&2
