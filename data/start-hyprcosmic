@@ -112,6 +112,48 @@ if mkdir -p "$(dirname "$HYPRCOSMIC_LOG")" 2>/dev/null; then
     fi
 fi
 
+# Seed the per-user configuration from the skeleton the package ships.
+#
+# waybar, the wallpaper and every keybinding come from
+# ~/.config/hyprcosmic/autostart. A machine that has never run HyprCosmic has no
+# such file, and what starts is a bare compositor: running, holding the display,
+# accepting input, with nothing drawn on the screen and no binding that opens
+# anything. Nothing reports an error, because as far as the session is concerned
+# nothing has gone wrong -- which is what makes it worth handling here rather
+# than in a note in the README.
+#
+# Only missing files are copied, and an existing one is never touched, not even
+# when the skeleton is newer. The file wins, one way; a login is not an
+# invitation to edit somebody's config. Two things follow from that: this is
+# safe to run on every session start, and deleting a file is how you ask for the
+# default back.
+#
+# Guarded throughout, like the log above. A session that cannot seed should
+# still start -- the user is no worse off than before this ran.
+HYPRCOSMIC_SKEL="${HYPRCOSMIC_SKEL:-/usr/share/hyprcosmic/skel}"
+HYPRCOSMIC_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+if [[ -d "$HYPRCOSMIC_SKEL" ]]; then
+    # Paths under the skeleton mirror the layout under ~/.config exactly, so
+    # the destination is the relative path and nothing here needs a list of
+    # which file goes where.
+    while IFS= read -r -d '' src; do
+        rel="${src#"$HYPRCOSMIC_SKEL"/}"
+        dest="$HYPRCOSMIC_CONFIG_HOME/$rel"
+        if [[ -e "$dest" ]]; then
+            continue
+        fi
+        # Every branch is an if rather than a && chain: set -e is on, and a
+        # trailing false would take the whole session down with it.
+        if mkdir -p "$(dirname "$dest")" 2>/dev/null && cp "$src" "$dest" 2>/dev/null; then
+            echo "    seeded:      $dest"
+        else
+            echo "    seed failed: $dest"
+        fi
+    done < <(find "$HYPRCOSMIC_SKEL" -type f -print0 2>/dev/null | sort -z)
+else
+    echo "    no skeleton at $HYPRCOSMIC_SKEL; ~/.config is left as it is"
+fi
+
 # Selects the component set in cosmic-session's profile module: cosmic-panel,
 # cosmic-launcher, cosmic-app-library, cosmic-workspaces, cosmic-bg and
 # cosmic-files-applet are skipped; waybar and friends come from
